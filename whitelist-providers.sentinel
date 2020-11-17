@@ -1,0 +1,24 @@
+# This policy uses the tfconfig/v2 import to whitelist specified providers.
+
+# Import common-functions/tfconfig-functions/tfconfig-functions.sentinel
+# with alias "config"
+import "tfconfig-functions" as config
+
+# List of whitelisted providers
+whitelist = ["vault"]
+
+# Get all providers
+allProviders = config.find_all_providers()
+
+# Filter to providers with violations
+# Warnings will not be printed for violations since the last parameter is false
+violatingProviders = config.filter_attribute_not_in_list(allProviders,
+                     "name", whitelist, false)
+
+# Print any violations
+config.print_violations(violatingProviders["messages"], "Provider not in whitelist:")
+
+# Main rule
+main = rule {
+ length(violatingProviders["messages"]) is 0
+}
