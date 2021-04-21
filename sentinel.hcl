@@ -24,3 +24,9 @@ policy "whitelist-resources" {
     source = "./whitelist-resources.sentinel"
     enforcement_level = "soft-mandatory"
 }
+
+policy "restrict-resources-by-module-source" {
+    source = "./restrict-resources-by-module-source.sentinel"
+    enforcement_level = "soft-mandatory"
+}
+
