@@ -8,7 +8,7 @@ import "tfconfig-functions" as config
 whitelist = ["vault_namespace", 
             "vault_token", 
             "vault_policy",
-            "vault_generic_secret"
+            "vault_generic_secret",
             "vault_mount"]
 
 # Get all Resources
