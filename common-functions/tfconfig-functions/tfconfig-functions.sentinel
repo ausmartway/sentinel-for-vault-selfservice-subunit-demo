@@ -45,7 +45,7 @@ find_resources_in_module = func(module_address) {
 # The parameter, provider, should be given as a string such as "aws".
 find_resources_by_provider = func(provider) {
   resources = filter tfconfig.resources as address, r {
-  	r.provider_config_key matches "(.*)" + provider + "(.*)" and
+  	r.provider_config_key matches "(.*:)?" + provider + "(\\..*)?" and
   	r.mode is "managed"
   }
 
@@ -90,7 +90,7 @@ find_datasources_in_module = func(module_address) {
 # The parameter, provider, should be given as a string such as "aws".
 find_datasources_by_provider = func(provider) {
   datasources = filter tfconfig.resources as address, d {
-  	d.provider_config_key matches "(.*)" + provider + "(.*)" and
+  	d.provider_config_key matches "(.*:)?" + provider + "(\\..*)?" and
   	d.mode is "data"
   }
 
@@ -125,7 +125,7 @@ find_all_providers = func() {
 # The parameter, provider, should be given as a string such as "aws".
 find_providers_by_type = func(type) {
   providers = filter tfconfig.providers as address, p {
-  	p.provider_config_key matches "(.*)" + type + "(.*)"
+  	p.provider_config_key matches "(.*:)?" + type + "(\\..*)?"
   }
 
   return providers
@@ -263,9 +263,10 @@ to_string = func(obj) {
         if index < lastIndex {
           output += to_string(value) + ", "
         } else {
-          output += to_string(value) + "]"
+          output += to_string(value)
         }
       }
+      output += "]"
       return output
     when "map":
       output = "{"
@@ -284,6 +285,37 @@ to_string = func(obj) {
   }
 }
 
+### evaluate_attribute ###
+# Evaluates an attribute
+# In general, the attribute should be a top-level attribute of item, but
+# we do special processing for attributes with form "config.x"
+# `item` is the item with the attribute
+# `attribute` is the attribute
+evaluate_attribute = func(item, attribute) {
+  # Split the attribute into a list, using "." as the separator
+  attributes = strings.split(attribute, ".")
+  if length(attributes) > 2 {
+    print("An attribute passed to evaluate_attribute can only have 1 or 2 fields")
+    return null
+  }
+  if attributes[0] is "config" {
+    config = item.config[attributes[1]] else {}
+    if "constant_value" in config {
+      # Found constant_value in config
+      return config.constant_value
+    } else if "references" in config {
+      # Found references in config
+      return config.references
+    } else {
+      # Did not find constant_value or references in config
+      return null
+    }
+  } else {
+    # Return the original attribute or the item
+    return item[attribute]
+  }
+}
+
 ### filter_attribute_not_in_list ###
 # Filter a list of items such as providers to those with a specified
 # attribute (attr) that is not in a given list of allowed values (allowed).
@@ -296,7 +328,8 @@ filter_attribute_not_in_list = func(items, attr, allowed, prtmsg) {
 
   # Iterate over items
   for items as index, item {
-    val = item[attr] else null
+    val = evaluate_attribute(item, attr) else null
+    #val = item[attr] else null
     # Check if the value is null
     if val is null {
       val = "null"
@@ -330,7 +363,8 @@ filter_attribute_in_list = func(items, attr, forbidden, prtmsg) {
 
   # Iterate over items
   for items as index, item {
-    val = item[attr] else null
+    val = evaluate_attribute(item, attr) else null
+    #val = item[attr] else null
     # Check if the value is null
     if val is null {
       val = "null"
@@ -350,4 +384,216 @@ filter_attribute_in_list = func(items, attr, forbidden, prtmsg) {
   } // end for items
 
   return {"items":violators,"messages":messages}
+}
+
+### filter_attribute_does_not_match_regex ###
+# Filter a list of items such as resources to those with a specified
+# attribute (attr) that does not match a regular expression (expr).
+# The parameter, attr, can only be a top-level attribute of items or
+# an attribute in the form "config.x".
+# Set prtmsg to `true` (without quotes) if you want to print violation messages.
+filter_attribute_does_not_match_regex = func(items, attr, expr, prtmsg) {
+  violators = {}
+	messages = {}
+  for items as index, item {
+    val = evaluate_attribute(item, attr) else null
+    if val is null {
+      # Add the item and a warning message to the violators list
+      message = to_string(index) + " has " + to_string(attr) +
+                " that is null or undefined. " + "It is supposed to " +
+                "match the regex " + to_string(expr)
+      violators[index] = item
+			messages[index] = message
+      if prtmsg {
+        print(message)
+      }
+    } else {
+      # Process lists and maps
+      if types.type_of(val) in ["list", "map"] {
+        message = ""
+        # Check each item of list or map
+        for val as i, v {
+          if v not matches expr {
+            # Add to the warning message
+            message += to_string(index) + " has " + to_string(attr) +
+                      " with value " + to_string(v) +
+                      " that does not match the regex " + to_string(expr) + "\n"
+          }
+          if message is not "" {
+            # Add the item and warning message to the violators list
+            violators[index] = item
+      			messages[index] = message
+            if prtmsg {
+              print(message)
+            }
+          } // end message not ""
+        } // end for
+      } else {
+        # Process single item
+        if val not matches expr {
+          # Add the item and a warning message to the violators list
+          message = to_string(index) + " has " + to_string(attr) +
+                    " with value " + to_string(val) +
+                    " that does not match the regex " + to_string(expr)
+          violators[index] = item
+          messages[index] = message
+          if prtmsg {
+            print(message)
+          }
+        } // end if single item not matches
+      } // end single item
+    } // end not null
+  } // end for items
+  return {"items":violators,"messages":messages}
+}
+
+### filter_attribute_matches_regex ###
+# Filter a list of items such as resources to those with a specified
+# attribute (attr) that matches a regular expression (expr).
+# The parameter, attr, can only be a top-level attribute of items or
+# an attribute in the form "config.x".
+# Set prtmsg to `true` (without quotes) if you want to print violation messages.
+# If you want to match null, set expr to "null".
+filter_attribute_matches_regex = func(items, attr, expr, prtmsg) {
+  violators = {}
+	messages = {}
+  for items as index, item {
+    val = evaluate_attribute(item, attr) else null
+    if val is null {
+      val = "null"
+    }
+    # Process lists and maps
+    if types.type_of(val) in ["list", "map"] {
+      message = ""
+      # Check each item of list or map
+      for val as i, v {
+        if v matches expr {
+          # Add to the warning message
+          message += to_string(index) + " has " + to_string(attr) +
+                    " with value " + to_string(v) +
+                    " that matches the regex " + to_string(expr) + "\n"
+        }
+        if message is not "" {
+          # Add the item and warning message to the violators list
+          violators[index] = item
+          messages[index] = message
+          if prtmsg {
+            print(message)
+          }
+        } // end message not ""
+      } // end for
+    } else {
+      # Process single item
+      if val matches expr {
+        # Add the item and a warning message to the violators list
+        message = to_string(index) + " has " + to_string(attr) +
+                  " with value " + to_string(val) +
+                  " that matches the regex " + to_string(expr)
+        violators[index] = item
+        messages[index] = message
+        if prtmsg {
+          print(message)
+        }
+      } // end if single item not matches
+    } // end single item
+  } // end for items
+  return {"items":violators,"messages":messages}
+}
+
+### get_module_source ###
+# Get the module source from a module address
+# Note that the module_address in many collections in the tfplan/v2, tfconfig/v2,
+# and tfstate/v2 imports gives the labels used in the module blocks.
+# For instance, a module_address like "module.A.module.B" means that the current
+# item is in a module with label "B" that is a module with label "A". But that
+# does not give you the source the module labeled "B".
+# But if you want to limit creation of resources to specific modules based on
+# their source, you need the module source.  This function computes it.
+get_module_source = func(module_address) {
+  # Check for root module
+  if module_address is "" {
+    return "root"
+  } else {
+    # Find parent module
+    module_segments = strings.split(module_address, ".")
+    num_segments = length(module_segments)
+    parent_module = strings.join(module_segments[0:num_segments-2], ".")
+    current_module_name = module_segments[num_segments-1]
+
+    # Find module call that called current module
+    if parent_module is "" {
+      # parent module is root module
+      mc = tfconfig.module_calls[current_module_name]
+    } else {
+      # parent module is not root module
+      mc = tfconfig.module_calls[parent_module + ":" + current_module_name]
+    }
+
+    # Set source from the module call
+    module_source = mc.source
+
+    return module_source
+  }
+}
+
+### get_ancestor_module_source ###
+# Get the module source of the first ancestor module from a module address that
+# is not a local module (one having source starting with "./" or "../").
+# Note that the module_address in many collections in the tfplan/v2, tfconfig/v2,
+# and tfstate/v2 imports gives the labels used in the module blocks.
+# For instance, a module_address like "module.A.module.B" means that the current
+# item is in a module with label "B" that is a module with label "A". But that
+# does not give you the source the module labeled "B".
+# But if you want to limit creation of resources to specific modules based on
+# their source, you need the module source.  This function computes it for
+# the first ancestor module that is not a local module.
+get_ancestor_module_source = func(module_address) {
+  # Check for root module
+  if module_address is "" {
+    return "root"
+  } else {
+    # Find parent module
+    module_segments = strings.split(module_address, ".")
+    num_segments = length(module_segments)
+    parent_module = strings.join(module_segments[0:num_segments-2], ".")
+    current_module_name = module_segments[num_segments-1]
+
+    # Find module call that called current module
+    if parent_module is "" {
+      # parent module is root module
+      mc = tfconfig.module_calls[current_module_name]
+    } else {
+      # parent module is not root module
+      mc = tfconfig.module_calls[parent_module + ":" + current_module_name]
+    }
+
+    # Set source from the module call
+    module_source = mc.source
+
+    # Check to see if current module source is a nested module
+    if strings.has_prefix(module_source, "./") or strings.has_prefix(module_source, "../") {
+      return get_ancestor_module_source(parent_module)
+    } else {
+      return module_source
+    }
+
+  }
+}
+
+### get_parent_module_address ###
+# Get the address of the parent module of a module from the module address
+# return "root" if the given module_address is "" (the root module).
+get_parent_module_address = func(module_address) {
+  # Check for root module
+  if module_address is "" {
+    return "root"
+  } else {
+    # Find parent module
+    module_segments = strings.split(module_address, ".")
+    num_segments = length(module_segments)
+    parent_module = strings.join(module_segments[0:num_segments-2], ".")
+    current_module_name = module_segments[num_segments-1]
+
+    return parent_module
+  }
 }

@@ -62,8 +62,8 @@ for restricted_resources as _, type {
 
     # Get module source
     module_address = r.module_address
-    #module_source = config.get_ancestor_module_source(module_address)
-    module_source = config.get_module_source(module_address)
+    module_source = config.get_ancestor_module_source(module_address)
+    #module_source = config.get_module_source(module_address)
 
     # Initialize found_match to false. We'll flip to true if we find a match.
     found_match = false
